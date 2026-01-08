@@ -325,26 +325,50 @@ func selectRulesBySubscribedQos(decision *models.SmPolicyDecision, subsQos *mode
 	}
 
 	// 2. Select PCC using SAME KEY
-	pcc, ok := decision.PccRules[selectedQosKey]
-	if !ok {
-		logger.SMpolicylog.Errorf("No PccRule with key=%s (same as QosDec key)", selectedQosKey)
+	// 2. Select PCC which references selected QoS
+	var (
+		selectedPccKey  string
+		selectedPccRule *models.PccRule
+	)
+
+	for pccKey, pccRule := range decision.PccRules {
+		if pccRule == nil {
+			continue
+		}
+		for _, qosRef := range pccRule.RefQosData {
+			if qosRef == selectedQosKey {
+				selectedPccKey = pccKey
+				selectedPccRule = pccRule
+				break
+			}
+		}
+		if selectedPccRule != nil {
+			break
+		}
+	}
+
+	if selectedPccRule == nil {
+		logger.SMpolicylog.Errorf("No PccRule references QosDec=%s", selectedQosKey)
 		decision.PccRules = map[string]*models.PccRule{}
 		return
 	}
 
 	decision.PccRules = map[string]*models.PccRule{
-		selectedQosKey: pcc,
+		selectedPccKey: selectedPccRule,
 	}
-	logger.SMpolicylog.Infof("Selected PccRule key=%s", selectedQosKey)
+
+	logger.SMpolicylog.Infof("Selected PccRule key=%s referencing QosDec=%s", selectedPccKey, selectedQosKey)
 
 	// 3. Select Traffic Control from PCC.RefTcData
-	if len(pcc.RefTcData) == 0 {
-		logger.SMpolicylog.Warnf("PccRule[%s] has no RefTcData", selectedQosKey)
+	// 3. Select Traffic Control from selected PCC
+	if len(selectedPccRule.RefTcData) == 0 {
+		logger.SMpolicylog.Warnf("PccRule[%s] has no RefTcData", selectedPccKey)
 		decision.TraffContDecs = map[string]*models.TrafficControlData{}
 		return
 	}
 
-	tcKey := pcc.RefTcData[0]
+	tcKey := selectedPccRule.RefTcData[0]
+
 	tc, ok := decision.TraffContDecs[tcKey]
 	if !ok {
 		logger.SMpolicylog.Errorf("No TrafficControlData with key=%s", tcKey)
