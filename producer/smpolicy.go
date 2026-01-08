@@ -302,12 +302,16 @@ func selectRulesBySubscribedQos(decision *models.SmPolicyDecision, subsQos *mode
 
 	logger.SMpolicylog.Infof("Selecting PCC/QoS rules by Var5qi=%d", subsQos.Var5qi)
 
-	var selectedQosKey string
+	var (
+		selectedQosKey string
+		selectedQos    *models.QosData
+	)
 
 	// 1. Select QoS
 	for key, qos := range decision.QosDecs {
 		if qos != nil && qos.Var5qi == subsQos.Var5qi {
 			selectedQosKey = key
+			selectedQos = qos
 			logger.SMpolicylog.Infof("Selected QosDec key=%s for Var5qi=%d", key, subsQos.Var5qi)
 			break
 		}
@@ -319,24 +323,24 @@ func selectRulesBySubscribedQos(decision *models.SmPolicyDecision, subsQos *mode
 	}
 
 	// Keep only selected QoS
-	selectedQos := decision.QosDecs[selectedQosKey]
+	// selectedQos := decision.QosDecs[selectedQosKey]
 	decision.QosDecs = map[string]*models.QosData{
 		selectedQosKey: selectedQos,
 	}
 
-	// 2. Select PCC using SAME KEY
-	// 2. Select PCC which references selected QoS
 	var (
 		selectedPccKey  string
 		selectedPccRule *models.PccRule
 	)
 
 	for pccKey, pccRule := range decision.PccRules {
+		logger.SMpolicylog.Infof("PCC[%s] RefQosData=%v", pccKey, pccRule.RefQosData)
 		if pccRule == nil {
 			continue
 		}
 		for _, qosRef := range pccRule.RefQosData {
-			if qosRef == selectedQosKey {
+			logger.SMpolicylog.Infof("Checking PCC[%s]: qosRef=%s vs selectedQos.QosId=%s selected qos key=%s", pccKey, qosRef, selectedQos.QosId, selectedQosKey)
+			if qosRef == selectedQos.QosId {
 				selectedPccKey = pccKey
 				selectedPccRule = pccRule
 				break
