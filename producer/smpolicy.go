@@ -250,26 +250,112 @@ func buildSmPolicyDecision(imsi string, snssai models.Snssai, dnn string, subscr
 	for _, sessRule := range sessionRules {
 		decision.SessRules[sessRule.SessRuleId] = deepcopy.Copy(sessRule).(*models.SessionRule)
 	}
+	selectRulesBySubscribedQos(&decision, subscribedQos)
+
 	return &decision, nil
 }
 
 func initSmPolicyDecisionFromPccPolicy(pccPolicy *polling.PccPolicy) models.SmPolicyDecision {
+	logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: start")
+
+	if pccPolicy == nil {
+		logger.SMpolicylog.Errorf("initSmPolicyDecisionFromPccPolicy: pccPolicy is nil")
+		return models.SmPolicyDecision{}
+	}
+
+	logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: PccRules=%d, QosDecs=%d, TraffContDecs=%d",
+		len(pccPolicy.PccRules), len(pccPolicy.QosDecs), len(pccPolicy.TraffContDecs))
+
 	decision := models.SmPolicyDecision{
 		SessRules:     make(map[string]*models.SessionRule),
 		PccRules:      make(map[string]*models.PccRule),
 		QosDecs:       make(map[string]*models.QosData),
 		TraffContDecs: make(map[string]*models.TrafficControlData),
 	}
+
 	for id, rule := range pccPolicy.PccRules {
+		logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: copying PCC rule id=%s", id)
 		decision.PccRules[id] = deepcopy.Copy(rule).(*models.PccRule)
 	}
+
 	for id, qos := range pccPolicy.QosDecs {
+		logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: copying QoS data id=%s", id)
 		decision.QosDecs[id] = deepcopy.Copy(qos).(*models.QosData)
 	}
+
 	for id, tc := range pccPolicy.TraffContDecs {
+		logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: copying TrafficControl data id=%s", id)
 		decision.TraffContDecs[id] = deepcopy.Copy(tc).(*models.TrafficControlData)
 	}
+
+	logger.SMpolicylog.Infof("initSmPolicyDecisionFromPccPolicy: done. Final counts: PccRules=%d, QosDecs=%d, TraffContDecs=%d",
+		len(decision.PccRules), len(decision.QosDecs), len(decision.TraffContDecs))
+
 	return decision
+}
+
+func selectRulesBySubscribedQos(decision *models.SmPolicyDecision, subsQos *models.SubscribedDefaultQos) {
+	if subsQos == nil {
+		logger.SMpolicylog.Warnf("SubscribedDefaultQos is nil, cannot select PCC/QoS rules")
+		return
+	}
+
+	logger.SMpolicylog.Infof("Selecting PCC/QoS rules by Var5qi=%d", subsQos.Var5qi)
+
+	var selectedQosKey string
+
+	// 1. Select QoS
+	for key, qos := range decision.QosDecs {
+		if qos != nil && qos.Var5qi == subsQos.Var5qi {
+			selectedQosKey = key
+			logger.SMpolicylog.Infof("Selected QosDec key=%s for Var5qi=%d", key, subsQos.Var5qi)
+			break
+		}
+	}
+
+	if selectedQosKey == "" {
+		logger.SMpolicylog.Errorf("No QosDec matches Var5qi=%d", subsQos.Var5qi)
+		return
+	}
+
+	// Keep only selected QoS
+	selectedQos := decision.QosDecs[selectedQosKey]
+	decision.QosDecs = map[string]*models.QosData{
+		selectedQosKey: selectedQos,
+	}
+
+	// 2. Select PCC using SAME KEY
+	pcc, ok := decision.PccRules[selectedQosKey]
+	if !ok {
+		logger.SMpolicylog.Errorf("No PccRule with key=%s (same as QosDec key)", selectedQosKey)
+		decision.PccRules = map[string]*models.PccRule{}
+		return
+	}
+
+	decision.PccRules = map[string]*models.PccRule{
+		selectedQosKey: pcc,
+	}
+	logger.SMpolicylog.Infof("Selected PccRule key=%s", selectedQosKey)
+
+	// 3. Select Traffic Control from PCC.RefTcData
+	if len(pcc.RefTcData) == 0 {
+		logger.SMpolicylog.Warnf("PccRule[%s] has no RefTcData", selectedQosKey)
+		decision.TraffContDecs = map[string]*models.TrafficControlData{}
+		return
+	}
+
+	tcKey := pcc.RefTcData[0]
+	tc, ok := decision.TraffContDecs[tcKey]
+	if !ok {
+		logger.SMpolicylog.Errorf("No TrafficControlData with key=%s", tcKey)
+		decision.TraffContDecs = map[string]*models.TrafficControlData{}
+		return
+	}
+
+	decision.TraffContDecs = map[string]*models.TrafficControlData{
+		tcKey: tc,
+	}
+	logger.SMpolicylog.Infof("Selected TrafficControl key=%s", tcKey)
 }
 
 func buildDefaultSessionPolicy(dnn string, ambr *models.Ambr, qos *models.SubscribedDefaultQos) map[string]*models.SessionRule {
